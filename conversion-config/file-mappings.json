@@ -1,4 +1,3 @@
-```json
 {
   "file_type_mappings": {
     ".prg": {
@@ -34,5 +33,3 @@
     "data": "Banking.Data/Models"
   }
 }
-```
-
