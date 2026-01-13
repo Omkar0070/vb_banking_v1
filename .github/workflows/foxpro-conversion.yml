@@ -169,7 +169,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Create Solution Structure
-        shell: pwsh
+        shell: powershell
         run: |
           dotnet new sln -n BankingSystem
 
