@@ -1,0 +1,19 @@
+```foxpro
+*-- Customer Entry Screen
+SCREEN customer.scx
+
+FIELDS:
+  customer_id   : Numeric(10)
+  customer_name : Character(50)
+  address       : Character(100)
+  phone         : Character(15)
+  email         : Character(50)
+
+BUTTONS:
+  - Save
+  - Cancel
+  - Delete
+  - Search
+```
+
+

@@ -1,0 +1,14 @@
+```sql
+SELECT customers.customer_id, ;
+       customers.customer_name, ;
+       customers.address, ;
+       accounts.account_no, ;
+       accounts.balance ;
+FROM customers ;
+INNER JOIN accounts ON customers.customer_id = accounts.customer_id ;
+WHERE customers.active = .T. ;
+ORDER BY customers.customer_name
+```
+
+---
+
