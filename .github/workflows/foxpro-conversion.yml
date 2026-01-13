@@ -1,0 +1,375 @@
+
+#### `.github/workflows/foxpro-conversion.yml`
+#yaml
+name: FoxPro to C# Conversion Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'foxpro-source/**'
+
+env:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed_files: ${{ steps.files.outputs.all }}
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+    
+    - name: Detect Changed Files
+      id: files
+      run: |
+        # Get list of changed FoxPro files
+        CHANGED=$(git diff --name-only HEAD^ HEAD | \
+          grep -E 'foxpro-source/.*\.(prg|scx|frx|qpr|dbf)$' || echo "")
+        
+        if [ -z "$CHANGED" ]; then
+          echo "No FoxPro files changed"
+          echo "all=" >> $GITHUB_OUTPUT
+        else
+          echo "Changed files:"
+          echo "$CHANGED"
+          # Convert to JSON array
+          FILES_JSON=$(echo "$CHANGED" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "all=$FILES_JSON" >> $GITHUB_OUTPUT
+        fi
+
+  convert-files:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_files != ''
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        file: ${{ fromJson(needs.detect-changes.outputs.changed_files) }}
+      max-parallel: 1  # Process files sequentially
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Dependencies
+      run: |
+        pip install openai tiktoken jinja2
+    
+    - name: Load Configuration
+      id: config
+      run: |
+        CONFIG=$(cat conversion-config/file-mappings.json)
+        PROMPTS=$(cat conversion-config/ai-prompts.json)
+        echo "config<<EOF" >> $GITHUB_OUTPUT
+        echo "$CONFIG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Convert File with AI
+      id: convert
+      run: |
+        python3 << 'PYTHON_SCRIPT'
+        import os
+        import json
+        import openai
+        from pathlib import Path
+        
+        # Configuration
+        file_path = "${{ matrix.file }}"
+        openai.api_key = os.environ['OPENAI_API_KEY']
+        
+        # Load file content
+        with open(file_path, 'r', encoding='latin-1') as f:
+            content = f.read()
+        
+        # Load prompts
+        with open('conversion-config/ai-prompts.json') as f:
+            prompts = json.load(f)
+        
+        # Determine file type
+        ext = Path(file_path).suffix.lower()
+        file_type = Path(file_path).parent.name
+        
+        # Build prompt
+        system_prompt = prompts['system_prompt']
+        user_prompt = prompts['file_type_prompts'].get(file_type, '')
+        
+        full_prompt = f"""{user_prompt}
+        
+File: {file_path}
+Extension: {ext}
+Type: {file_type}
+
+FoxPro Code:
+```foxpro
+{content}
+```
+
+Generate complete, production-ready C# code with:
+- Proper namespace
+- XML documentation
+- Error handling
+- Modern C# patterns
+"""
+        
+        # Call OpenAI API
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": full_prompt}
+            ],
+            temperature=0.2,
+            max_tokens=4000
+        )
+        
+        csharp_code = response.choices[0].message.content
+        
+        # Extract code from markdown if present
+        if '```csharp' in csharp_code:
+            csharp_code = csharp_code.split('```csharp')[1].split('```')[0].strip()
+        
+        # Determine output path
+        with open('conversion-config/file-mappings.json') as f:
+            mappings = json.load(f)
+        
+        dir_mapping = mappings['directory_mappings'].get(file_type, 'Banking.Core')
+        output_path = f"csharp-translated/{dir_mapping}/{Path(file_path).stem}.cs"
+        
+        # Create directory
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write C# file
+        with open(output_path, 'w') as f:
+            f.write(csharp_code)
+        
+        print(f"Converted: {file_path} -> {output_path}")
+        
+        # Save metadata
+        metadata = {
+            "source_file": file_path,
+            "target_file": output_path,
+            "timestamp": "$(date -Iseconds)",
+            "model": "gpt-4-turbo-preview",
+            "developer": "${{ github.actor }}"
+        }
+        
+        with open(f"{output_path}.meta.json", 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        PYTHON_SCRIPT
+    
+    - name: Commit Converted Code
+      run: |
+        git config user.name "AI Converter Bot"
+        git config user.email "ai-bot@banking.local"
+        git checkout -b csharp-translated || git checkout csharp-translated
+        git add csharp-translated/
+        git commit -m "AI Conversion: ${{ matrix.file }} by @${{ github.actor }}" || echo "No changes"
+        git push origin csharp-translated --force
+
+  compile-and-test:
+    needs: convert-files
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout Translated Code
+      uses: actions/checkout@v4
+      with:
+        ref: csharp-translated
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    
+    - name: Create Solution Structure
+      shell: pwsh
+      run: |
+        # Create main solution
+        dotnet new sln -n BankingSystem
+        
+        # Create projects for each namespace
+        $projects = @(
+          @{Name="Banking.Core"; Type="classlib"},
+          @{Name="Banking.Forms"; Type="winforms"},
+          @{Name="Banking.Reports"; Type="classlib"},
+          @{Name="Banking.Data"; Type="classlib"}
+        )
+        
+        foreach ($proj in $projects) {
+          if (Test-Path "csharp-translated/$($proj.Name)") {
+            dotnet new $($proj.Type) -n $($proj.Name) -o $($proj.Name)
+            dotnet sln add "$($proj.Name)/$($proj.Name).csproj"
+            
+            # Copy converted files
+            Copy-Item "csharp-translated/$($proj.Name)/*.cs" "$($proj.Name)/" -Force
+          }
+        }
+        
+        # Add project references
+        dotnet add Banking.Forms/Banking.Forms.csproj reference Banking.Core/Banking.Core.csproj
+        dotnet add Banking.Reports/Banking.Reports.csproj reference Banking.Data/Banking.Data.csproj
+    
+    - name: Restore Dependencies
+      run: dotnet restore
+    
+    - name: Build Solution
+      id: build
+      continue-on-error: true
+      run: |
+        dotnet build --configuration Release --no-restore > build_output.txt 2>&1
+        echo "BUILD_EXIT_CODE=$LASTEXITCODE" >> $env:GITHUB_ENV
+        cat build_output.txt
+    
+    - name: Analyze Build Output
+      id: analyze
+      shell: pwsh
+      run: |
+        $output = Get-Content build_output.txt -Raw
+        
+        # Count errors and warnings
+        $errors = ([regex]::Matches($output, "error")).Count
+        $warnings = ([regex]::Matches($output, "warning")).Count
+        
+        echo "ERROR_COUNT=$errors" >> $env:GITHUB_ENV
+        echo "WARNING_COUNT=$warnings" >> $env:GITHUB_ENV
+        
+        # Extract error messages
+        $errorLines = $output -split "`n" | Where-Object { $_ -match "error" }
+        $warningLines = $output -split "`n" | Where-Object { $_ -match "warning" }
+        
+        # Save to file for notifications
+        @{
+          errors = $errorLines
+          warnings = $warningLines
+          total_errors = $errors
+          total_warnings = $warnings
+        } | ConvertTo-Json | Out-File analysis.json
+    
+    - name: Success - Push to Validated Branch
+      if: env.ERROR_COUNT == '0'
+      run: |
+        git config user.name "Validation Bot"
+        git config user.email "validation-bot@banking.local"
+        git checkout -b csharp-validated
+        git push origin csharp-validated --force
+    
+    - name: Failure - Create Issue and Notify
+      if: env.ERROR_COUNT != '0'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const analysis = JSON.parse(fs.readFileSync('analysis.json', 'utf8'));
+          
+          // Create GitHub Issue
+          const issue = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `⚠️ Build Failed: ${analysis.total_errors} Errors, ${analysis.total_warnings} Warnings`,
+            body: `### Build Failure Report
+            
+**Triggered by:** @${context.actor}
+**Commit:** ${context.sha}
+**Branch:** csharp-translated
+
+#### Errors (${analysis.total_errors})
+\`\`\`
+${analysis.errors.slice(0, 10).join('\n')}
+\`\`\`
+
+#### Warnings (${analysis.total_warnings})
+\`\`\`
+${analysis.warnings.slice(0, 5).join('\n')}
+\`\`\`
+
+**Action Required:** Review and fix compilation errors before merging.
+
+[View Build Logs](${context.payload.repository.html_url}/actions/runs/${context.runId})
+`,
+            labels: ['build-failure', 'automated'],
+            assignees: [context.actor]
+          });
+          
+          // Add PR Review Comment
+          const commits = await github.rest.repos.listCommits({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: 'csharp-translated',
+            per_page: 1
+          });
+          
+          await github.rest.repos.createCommitComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: commits.data[0].sha,
+            body: `❌ **Build Failed**
+            
+- **Errors:** ${analysis.total_errors}
+- **Warnings:** ${analysis.total_warnings}
+- **Issue:** #${issue.data.number}
+
+Please review the [build logs](${context.payload.repository.html_url}/actions/runs/${context.runId}) and fix the errors.`
+          });
+          
+          // Create Discussion
+          try {
+            await github.rest.discussions.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Build Failure Discussion - ${context.sha.substring(0,7)}`,
+              body: `Automated build failed for commit by @${context.actor}. See issue #${issue.data.number} for details.`,
+              category: 'general'
+            });
+          } catch (e) {
+            console.log('Discussions not enabled or failed:', e.message);
+          }
+    
+    - name: Send Email Notification
+      if: env.ERROR_COUNT != '0'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ secrets.SMTP_SERVER }}
+        server_port: 587
+        username: ${{ secrets.SMTP_USERNAME }}
+        password: ${{ secrets.SMTP_PASSWORD }}
+        subject: "❌ Build Failed - FoxPro to C# Conversion"
+        to: ${{ github.actor }}@company.com
+        from: devops@company.com
+        html_body: |
+          <!DOCTYPE html>
+          <html>
+          <body>
+            <h2 style="color: #d32f2f;">Build Failed</h2>
+            <p><strong>Developer:</strong> ${{ github.actor }}</p>
+            <p><strong>Repository:</strong> ${{ github.repository }}</p>
+            <p><strong>Commit:</strong> ${{ github.sha }}</p>
+            
+            <h3>Summary</h3>
+            <ul>
+              <li><strong>Errors:</strong> ${{ env.ERROR_COUNT }}</li>
+              <li><strong>Warnings:</strong> ${{ env.WARNING_COUNT }}</li>
+            </ul>
+            
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Build Logs</a></p>
+          </body>
+          </html>
+    
+    - name: Upload Build Artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-output
+        path: |
+          build_output.txt
+          analysis.json
+          **/*.csproj
