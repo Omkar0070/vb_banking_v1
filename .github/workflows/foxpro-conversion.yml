@@ -55,7 +55,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install openai tiktoken jinja2
+          pip install openai==0.28.1 tiktoken jinja2
 
       - name: Convert File with AI
         run: |
