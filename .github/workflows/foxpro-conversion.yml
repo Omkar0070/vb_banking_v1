@@ -107,13 +107,13 @@ jobs:
           """
 
           response = openai.ChatCompletion.create(
-              model="gpt-4.1",
+              model="gpt-4o-mini",
               messages=[
                   {"role": "system", "content": system_prompt},
                   {"role": "user", "content": full_prompt}
               ],
               temperature=0.2,
-              max_tokens=4000
+              max_tokens=2000
           )
 
           csharp_code = response.choices[0].message.content
