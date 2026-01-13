@@ -1,4 +1,5 @@
 name: FoxPro to C# Conversion Pipeline
+
 permissions:
   contents: write
 
@@ -12,6 +13,7 @@ env:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
 jobs:
+
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -26,11 +28,10 @@ jobs:
       - name: Detect Changed Files
         id: files
         run: |
-          CHANGED=$(git diff --name-only HEAD^ HEAD | \
-            grep -E 'foxpro-source/.*\.(prg|scx|frx|qpr|dbf)$' || echo "")
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E 'foxpro-source/.*\.(prg|scx|frx|qpr|dbf)$' || true)
 
           if [ -z "$CHANGED" ]; then
-            echo "all=" >> $GITHUB_OUTPUT
+            echo "all=[]" >> $GITHUB_OUTPUT
           else
             FILES_JSON=$(echo "$CHANGED" | jq -R -s -c 'split("\n") | map(select(length > 0))')
             echo "all=$FILES_JSON" >> $GITHUB_OUTPUT
@@ -38,7 +39,7 @@ jobs:
 
   convert-files:
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed_files != ''
+    if: needs.detect-changes.outputs.changed_files != '[]'
     runs-on: ubuntu-latest
 
     strategy:
@@ -47,107 +48,68 @@ jobs:
       max-parallel: 1
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          pip install openai==0.28.1 tiktoken jinja2
+      - name: Install Python dependencies
+        run: pip install openai==0.28.1 tiktoken jinja2
 
-      - name: Convert File with AI
+      - name: Convert FoxPro → C#
         run: |
           python3 << 'PYTHON_SCRIPT'
-          import os
-          import json
-          import openai
+          import os, json, openai
           from pathlib import Path
 
-          openai.api_key = os.environ['OPENAI_API_KEY']
-
+          openai.api_key = os.environ["OPENAI_API_KEY"]
           file_path = "${{ matrix.file }}"
 
-          with open(file_path, 'r', encoding='latin-1') as f:
+          with open(file_path, "r", encoding="latin-1") as f:
               content = f.read()
 
-          with open('conversion-config/ai-prompts.json') as f:
-              prompts = json.load(f)
+          prompts = json.load(open("conversion-config/ai-prompts.json"))
+          mappings = json.load(open("conversion-config/file-mappings.json"))
 
-          with open('conversion-config/file-mappings.json') as f:
-              mappings = json.load(f)
-
-          ext = Path(file_path).suffix.lower()
           file_type = Path(file_path).parent.name
 
-          system_prompt = prompts['system_prompt']
-          user_prompt = prompts['file_type_prompts'].get(file_type, '')
-
-          MAX_CHARS = 12000
-          if len(content) > MAX_CHARS:
-              content = content[:MAX_CHARS] + "\n\n/* TRUNCATED FOR TOKEN SAFETY */"
-
-          full_prompt = f"""{user_prompt}
+          prompt = f"""{prompts['file_type_prompts'].get(file_type, '')}
 
           File: {file_path}
-          Extension: {ext}
-          Type: {file_type}
 
-          FoxPro Code:
           ```foxpro
-          {content}
+          {content[:12000]}
           ```
-
-          Generate complete, production-ready C# code with:
-          - Proper namespace
-          - XML documentation
-          - Error handling
-          - Modern C# patterns
           """
 
-          response = openai.ChatCompletion.create(
+          resp = openai.ChatCompletion.create(
               model="gpt-4o-mini",
               messages=[
-                  {"role": "system", "content": system_prompt},
-                  {"role": "user", "content": full_prompt}
+                  {"role":"system","content":prompts["system_prompt"]},
+                  {"role":"user","content":prompt}
               ],
               temperature=0.2,
               max_tokens=2000
           )
 
-          csharp_code = response.choices[0].message.content
+          code = resp.choices[0].message.content
+          if "```csharp" in code:
+              code = code.split("```csharp")[1].split("```")[0].strip()
 
-          if '```csharp' in csharp_code:
-              csharp_code = csharp_code.split('```csharp')[1].split('```')[0].strip()
-
-          dir_mapping = mappings['directory_mappings'].get(file_type, 'Banking.Core')
-          output_path = f"csharp-translated/{dir_mapping}/{Path(file_path).stem}.cs"
-
-          Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-          with open(output_path, 'w') as f:
-              f.write(csharp_code)
-
-          with open(f"{output_path}.meta.json", 'w') as f:
-              json.dump({
-                  "source": file_path,
-                  "target": output_path,
-                  "model": "gpt-5-nano",
-                  "actor": "${{ github.actor }}"
-              }, f, indent=2)
-
+          out_dir = mappings["directory_mappings"].get(file_type,"Banking.Core")
+          out = f"csharp-translated/{out_dir}/{Path(file_path).stem}.cs"
+          Path(out).parent.mkdir(parents=True, exist_ok=True)
+          open(out,"w").write(code)
           PYTHON_SCRIPT
 
-      - name: Commit Converted Code
+      - name: Commit generated code
         run: |
           git config user.name "AI Converter Bot"
           git config user.email "ai-bot@banking.local"
           git checkout -B csharp-translated
-          git add csharp-translated/
-          git commit -m "AI Conversion: ${{ matrix.file }}" || echo "No changes"
+          git add csharp-translated
+          git commit -m "AI Conversion: ${{ matrix.file }}" || true
           git push origin csharp-translated --force
 
   compile-and-test:
@@ -158,17 +120,15 @@ jobs:
       - dotnet
 
     steps:
-      - name: Checkout Translated Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: csharp-translated
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: 8.0.x
 
-      - name: Create Solution Structure
+      - name: Create solution & projects
         shell: powershell
         run: |
           dotnet new sln -n BankingSystem
@@ -180,26 +140,31 @@ jobs:
             @{Name="Banking.Data"; Type="classlib"}
           )
 
-          foreach ($proj in $projects) {
-            if (Test-Path "csharp-translated/$($proj.Name)") {
-              dotnet new $($proj.Type) -n $($proj.Name) -o $($proj.Name)
-              dotnet sln add "$($proj.Name)/$($proj.Name).csproj"
-              Copy-Item "csharp-translated/$($proj.Name)/*.cs" "$($proj.Name)/" -Force
+          foreach ($p in $projects) {
+            $src="csharp-translated/$($p.Name)"
+            if (Test-Path $src) {
+              dotnet new $($p.Type) -n $($p.Name) -o $($p.Name)
+              dotnet sln add "$($p.Name)/$($p.Name).csproj"
+              Copy-Item "$src/*.cs" "$($p.Name)/" -Force
             }
           }
 
-          dotnet add Banking.Forms/Banking.Forms.csproj reference Banking.Core/Banking.Core.csproj
-          dotnet add Banking.Reports/Banking.Reports.csproj reference Banking.Data/Banking.Data.csproj
+          if (Test-Path Banking.Forms/Banking.Forms.csproj -and Test-Path Banking.Core/Banking.Core.csproj) {
+            dotnet add Banking.Forms/Banking.Forms.csproj reference Banking.Core/Banking.Core.csproj
+          }
 
-      - name: Restore Dependencies
+          if (Test-Path Banking.Reports/Banking.Reports.csproj -and Test-Path Banking.Data/Banking.Data.csproj) {
+            dotnet add Banking.Reports/Banking.Reports.csproj reference Banking.Data/Banking.Data.csproj
+          }
+
+      - name: Restore
         run: dotnet restore
 
-      - name: Build Solution
+      - name: Build
         continue-on-error: true
-        run: |
-          dotnet build --configuration Release > build_output.txt 2>&1
+        run: dotnet build --configuration Release > build_output.txt 2>&1
 
-      - name: Upload Build Logs
+      - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
