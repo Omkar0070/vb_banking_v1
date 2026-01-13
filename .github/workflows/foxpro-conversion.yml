@@ -97,10 +97,11 @@ jobs:
           if "```csharp" in code:
               code = code.split("```csharp")[1].split("```")[0].strip()
 
-          out_dir = mappings["directory_mappings"].get(file_type,"Banking.Core")
+          out_dir = mappings["directory_mappings"].get(file_type, "Banking.Core")
           out = f"csharp-translated/{out_dir}/{Path(file_path).stem}.cs"
+
           Path(out).parent.mkdir(parents=True, exist_ok=True)
-          open(out,"w").write(code)
+          open(out, "w").write(code)
           PYTHON_SCRIPT
 
       - name: Commit generated code
@@ -120,11 +121,13 @@ jobs:
       - dotnet
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Translated Code
+        uses: actions/checkout@v4
         with:
           ref: csharp-translated
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
@@ -134,26 +137,38 @@ jobs:
           dotnet new sln -n BankingSystem
 
           $projects = @(
-            @{Name="Banking.Core"; Type="classlib"},
-            @{Name="Banking.Forms"; Type="winforms"},
-            @{Name="Banking.Reports"; Type="classlib"},
-            @{Name="Banking.Data"; Type="classlib"}
+            @{ Name = "Banking.Core"; Type = "classlib" },
+            @{ Name = "Banking.Forms"; Type = "winforms" },
+            @{ Name = "Banking.Reports"; Type = "classlib" },
+            @{ Name = "Banking.Data"; Type = "classlib" }
           )
 
           foreach ($p in $projects) {
-            $src="csharp-translated/$($p.Name)"
-            if (Test-Path $src) {
+            $srcPath = "csharp-translated/$($p.Name)"
+
+            if (Test-Path $srcPath) {
+              Write-Host "Creating project $($p.Name)"
+
               dotnet new $($p.Type) -n $($p.Name) -o $($p.Name)
               dotnet sln add "$($p.Name)/$($p.Name).csproj"
-              Copy-Item "$src/*.cs" "$($p.Name)/" -Force
+              Copy-Item "$srcPath/*.cs" "$($p.Name)/" -Force
+            }
+            else {
+              Write-Host "Skipping $($p.Name) – no source files"
             }
           }
 
-          if (Test-Path Banking.Forms/Banking.Forms.csproj -and Test-Path Banking.Core/Banking.Core.csproj) {
+          if (
+            (Test-Path "Banking.Forms/Banking.Forms.csproj") -and
+            (Test-Path "Banking.Core/Banking.Core.csproj")
+          ) {
             dotnet add Banking.Forms/Banking.Forms.csproj reference Banking.Core/Banking.Core.csproj
           }
 
-          if (Test-Path Banking.Reports/Banking.Reports.csproj -and Test-Path Banking.Data/Banking.Data.csproj) {
+          if (
+            (Test-Path "Banking.Reports/Banking.Reports.csproj") -and
+            (Test-Path "Banking.Data/Banking.Data.csproj")
+          ) {
             dotnet add Banking.Reports/Banking.Reports.csproj reference Banking.Data/Banking.Data.csproj
           }
 
