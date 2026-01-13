@@ -1,4 +1,6 @@
 name: FoxPro to C# Conversion Pipeline
+permissions:
+  contents: write
 
 on:
   push:
