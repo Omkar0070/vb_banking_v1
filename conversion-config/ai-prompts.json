@@ -3,7 +3,7 @@
   "file_type_prompts": {
     "forms": "Convert this FoxPro form to C# Windows Forms or WPF. Include:\n- Event handlers\n- Data binding\n- Validation logic\n- UI layout",
     "modules": "Convert this FoxPro module to C# class library. Include:\n- Static/instance methods\n- Proper return types\n- Exception handling\n- Unit test compatibility",
-    "reports": "Convert this FoxPro report to C# with Report Viewer or equivalent. Include:\n- Data source configuration\n- Report parameters\n- Export functionality",
+    "reports": "Convert this FoxPro report to a C# service class (NOT a Web API controller). Generate a report service that:\n- Uses dependency injection for data access\n- Returns report data as DTOs or models\n- Includes methods for filtering and generating reports\n- Uses async/await patterns\n- Does NOT include Web API attributes like [HttpGet], [Route], [ApiController], etc.\n- Example: public class AccountStatementService { public async Task<StatementReport> GenerateStatement(...) }",
     "queries": "Convert this FoxPro query to Entity Framework LINQ or SQL stored procedure. Include:\n- Parameterized queries\n- Proper joins\n- Optimize for performance"
   }
 }

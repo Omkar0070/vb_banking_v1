@@ -167,6 +167,13 @@ jobs:
             }
           }
 
+          # Detect ASP.NET Core Web API usage
+          if ($code -match "\[HttpGet\]|\[HttpPost\]|\[Route\]|\[ApiController\]") {
+            if (Test-Path "Banking.Reports/Banking.Reports.csproj") {
+              AddPkg "Banking.Reports/Banking.Reports.csproj" "Microsoft.AspNetCore.Mvc.Core"
+            }
+          }
+
       - run: dotnet restore
       - run: dotnet build --configuration Release
         continue-on-error: true
