@@ -149,28 +149,40 @@ jobs:
       - name: Auto-add NuGet packages
         shell: powershell
         run: |
-          $code = Get-ChildItem -Recurse -Filter *.cs | Get-Content -Raw
-
           function AddPkg($proj,$pkg) {
+            Write-Host "Adding $pkg to $proj"
             dotnet add $proj package $pkg
           }
 
-          if (Test-Path "Banking.Core/Banking.Core.csproj") {
+          # Check each project's code for required packages
+          $projects = @(
+            @{Name='Banking.Core';Path='Banking.Core/Banking.Core.csproj'},
+            @{Name='Banking.Reports';Path='Banking.Reports/Banking.Reports.csproj'},
+            @{Name='Banking.Forms';Path='Banking.Forms/Banking.Forms.csproj'},
+            @{Name='Banking.Data';Path='Banking.Data/Banking.Data.csproj'}
+          )
 
-            if ($code -match "EntityFrameworkCore") {
-              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.EntityFrameworkCore"
-              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.EntityFrameworkCore.Abstractions"
-            }
+          foreach ($p in $projects) {
+            if (Test-Path $p.Path) {
+              $code = Get-ChildItem "$($p.Name)/*.cs" -ErrorAction SilentlyContinue | Get-Content -Raw
 
-            if ($code -match "Microsoft.Extensions.Logging") {
-              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.Extensions.Logging.Abstractions"
-            }
-          }
+              if ($code) {
+                # Entity Framework Core
+                if ($code -match "EntityFrameworkCore|DbContext|DbSet") {
+                  AddPkg $p.Path "Microsoft.EntityFrameworkCore"
+                  AddPkg $p.Path "Microsoft.EntityFrameworkCore.SqlServer"
+                }
 
-          # Detect ASP.NET Core Web API usage
-          if ($code -match "\[HttpGet\]|\[HttpPost\]|\[Route\]|\[ApiController\]") {
-            if (Test-Path "Banking.Reports/Banking.Reports.csproj") {
-              AddPkg "Banking.Reports/Banking.Reports.csproj" "Microsoft.AspNetCore.Mvc.Core"
+                # Logging
+                if ($code -match "ILogger|Microsoft.Extensions.Logging") {
+                  AddPkg $p.Path "Microsoft.Extensions.Logging.Abstractions"
+                }
+
+                # ASP.NET Core Web API
+                if ($code -match "\[HttpGet\]|\[HttpPost\]|\[Route\]|\[ApiController\]") {
+                  AddPkg $p.Path "Microsoft.AspNetCore.Mvc.Core"
+                }
+              }
             }
           }
 
