@@ -1,30 +1,25 @@
 {
   "file_type_mappings": {
     ".prg": {
-      "target_extension": ".cs",
-      "namespace_prefix": "Banking",
-      "base_path": "Core"
+      "target_extension": ".cs"
     },
     ".scx": {
       "target_extension": ".cs",
-      "namespace_prefix": "Banking.Forms",
       "framework": "WinForms"
     },
     ".frx": {
       "target_extension": ".rdlc",
-      "namespace_prefix": "Banking.Reports",
       "framework": "ReportViewer"
     },
     ".qpr": {
-      "target_extension": ".sql",
-      "namespace_prefix": "Banking.Data.Queries"
+      "target_extension": ".sql"
     },
     ".dbf": {
       "target_extension": ".cs",
-      "namespace_prefix": "Banking.Data.Models",
       "generate_entity": true
     }
   },
+
   "directory_mappings": {
     "forms": "Banking.Forms",
     "reports": "Banking.Reports",
