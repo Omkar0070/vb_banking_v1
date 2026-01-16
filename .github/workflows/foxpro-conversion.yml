@@ -14,6 +14,9 @@ env:
 
 jobs:
 
+# ----------------------------------
+# Detect changes
+# ----------------------------------
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -33,6 +36,9 @@ jobs:
             echo "all=$(echo "$CHANGED" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
           fi
 
+# ----------------------------------
+# Convert FoxPro → C#
+# ----------------------------------
   convert-files:
     needs: detect-changes
     if: needs.detect-changes.outputs.changed_files != '[]'
@@ -45,14 +51,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - run: pip install openai==0.28.1 tiktoken jinja2
 
-      - name: Convert FoxPro → C#
+      - name: Convert
         run: |
           python3 << 'PYTHON'
           import os, json, openai
@@ -61,12 +66,12 @@ jobs:
           openai.api_key = os.environ["OPENAI_API_KEY"]
           file = "${{ matrix.file }}"
 
-          content = open(file, "r", encoding="latin-1").read()
+          content = open(file,"r",encoding="latin-1").read()
           prompts = json.load(open("conversion-config/ai-prompts.json"))
           mappings = json.load(open("conversion-config/file-mappings.json"))
 
           ftype = Path(file).parent.name
-          prompt = f"""{prompts['file_type_prompts'].get(ftype, '')}
+          prompt = f"""{prompts['file_type_prompts'].get(ftype,'')}
 
           ```foxpro
           {content[:12000]}
@@ -74,22 +79,22 @@ jobs:
           """
 
           resp = openai.ChatCompletion.create(
-              model="gpt-4o-mini",
-              messages=[
-                  {"role":"system","content":prompts["system_prompt"]},
-                  {"role":"user","content":prompt}
-              ],
-              max_tokens=2000
+            model="gpt-4o-mini",
+            messages=[
+              {"role":"system","content":prompts["system_prompt"]},
+              {"role":"user","content":prompt}
+            ],
+            max_tokens=2000
           )
 
           code = resp.choices[0].message.content
           if "```csharp" in code:
-              code = code.split("```csharp")[1].split("```")[0]
+            code = code.split("```csharp")[1].split("```")[0].strip()
 
-          outdir = mappings["directory_mappings"].get(ftype, "Banking.Core")
+          outdir = mappings["directory_mappings"].get(ftype,"Banking.Core")
           out = f"csharp-translated/{outdir}/{Path(file).stem}.cs"
-          Path(out).parent.mkdir(parents=True, exist_ok=True)
-          open(out, "w").write(code)
+          Path(out).parent.mkdir(parents=True,exist_ok=True)
+          open(out,"w").write(code)
           PYTHON
 
       - run: |
@@ -97,9 +102,12 @@ jobs:
           git config user.email "ai-bot@banking.local"
           git checkout -B csharp-translated
           git add csharp-translated
-          git commit -m "AI Conversion: ${{ matrix.file }}" || true
+          git commit -m "AI Conversion" || true
           git push origin csharp-translated --force
 
+# ----------------------------------
+# Compile & Test (Windows)
+# ----------------------------------
   compile-and-test:
     needs: convert-files
     runs-on:
@@ -116,7 +124,7 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build Solution
+      - name: Create projects
         shell: powershell
         run: |
           dotnet new sln -n BankingSystem
@@ -129,7 +137,7 @@ jobs:
           )
 
           foreach ($p in $projects) {
-            $src = "csharp-translated/$($p.Name)"
+            $src="csharp-translated/$($p.Name)"
             if (Test-Path $src) {
               dotnet new $($p.Type) -n $($p.Name) -o $($p.Name)
               dotnet sln add "$($p.Name)/$($p.Name).csproj"
@@ -137,16 +145,26 @@ jobs:
             }
           }
 
-          $formsOk   = Test-Path 'Banking.Forms/Banking.Forms.csproj'
-          $coreOk    = Test-Path 'Banking.Core/Banking.Core.csproj'
-          if ($formsOk -and $coreOk) {
-            dotnet add Banking.Forms/Banking.Forms.csproj reference Banking.Core/Banking.Core.csproj
+      #  THIS IS WHAT YOU WERE MISSING
+      - name: Auto-add NuGet packages
+        shell: powershell
+        run: |
+          $code = Get-ChildItem -Recurse -Filter *.cs | Get-Content -Raw
+
+          function AddPkg($proj,$pkg) {
+            dotnet add $proj package $pkg
           }
 
-          $repOk = Test-Path 'Banking.Reports/Banking.Reports.csproj'
-          $dataOk = Test-Path 'Banking.Data/Banking.Data.csproj'
-          if ($repOk -and $dataOk) {
-            dotnet add Banking.Reports/Banking.Reports.csproj reference Banking.Data/Banking.Data.csproj
+          if (Test-Path "Banking.Core/Banking.Core.csproj") {
+
+            if ($code -match "EntityFrameworkCore") {
+              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.EntityFrameworkCore"
+              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.EntityFrameworkCore.Abstractions"
+            }
+
+            if ($code -match "Microsoft.Extensions.Logging") {
+              AddPkg "Banking.Core/Banking.Core.csproj" "Microsoft.Extensions.Logging.Abstractions"
+            }
           }
 
       - run: dotnet restore
